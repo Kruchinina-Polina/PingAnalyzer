@@ -158,7 +158,6 @@ int is_private_ip(const char* host) {
     return 0;
 }
 
-// ---------- Новая функция: универсальный WMIC CSV-запрос ----------
 int run_wmic_csv(int is_local, const char* host, const char* login, const char* password,
     const char* wql, char* out_value, unsigned int out_size)
 {
@@ -219,18 +218,77 @@ int run_wmic_csv(int is_local, const char* host, const char* login, const char* 
     }
     return 0;
 }
-// ----------------------------------------------------------------
 
-// Заглушки для остальных функций (будут добавлены позже)
-int get_cpu_usage(int is_local, const char* host, const char* login, const char* password, int* cpu_percent) { return -1; }
+// ---------- Функции сбора метрик ----------
+int get_cpu_usage(int is_local, const char* host, const char* login, const char* password, int* cpu_percent) {
+    char val[32];
+    if (run_wmic_csv(is_local, host, login, password, "cpu get loadpercentage", val, sizeof(val)) == 0) {
+        if (strlen(val) > 0 && is_digit(val[0])) {
+            *cpu_percent = atoi(val);
+            return 0;
+        }
+    }
+    return -1;
+}
+
 int get_ram_usage(int is_local, const char* host, const char* login, const char* password,
     int* used_percent, unsigned long long* used_mb, unsigned long long* total_mb) {
+    char combined[128];
+    char* comma;
+    char* free_str;
+    char* total_str;
+    unsigned long long free_kb, total_kb;
+
+    if (run_wmic_csv(is_local, host, login, password,
+        "OS get FreePhysicalMemory,TotalVisibleMemorySize", combined, sizeof(combined)) == 0) {
+        comma = strchr(combined, ',');
+        if (!comma) return -1;
+        *comma = '\0';
+        free_str = combined;
+        total_str = comma + 1;
+        trim(free_str);
+        trim(total_str);
+        free_kb = strtoull(free_str, NULL, 10);
+        total_kb = strtoull(total_str, NULL, 10);
+        if (total_kb == 0) return -1;
+        *total_mb = total_kb / 1024;
+        *used_mb = (total_kb - free_kb) / 1024;
+        *used_percent = (int)((*used_mb * 100) / (*total_mb));
+        return 0;
+    }
     return -1;
 }
+
 int get_disk_usage(int is_local, const char* host, const char* login, const char* password,
     int* used_percent, double* used_gb, double* total_gb) {
+    char combined[128];
+    char* comma;
+    char* free_str;
+    char* total_str;
+    unsigned long long free_bytes, total_bytes;
+
+    if (run_wmic_csv(is_local, host, login, password,
+        "logicaldisk where \"DeviceID='C:'\" get FreeSpace,Size", combined, sizeof(combined)) == 0) {
+        comma = strchr(combined, ',');
+        if (!comma) return -1;
+        *comma = '\0';
+        free_str = combined;
+        total_str = comma + 1;
+        trim(free_str);
+        trim(total_str);
+        free_bytes = strtoull(free_str, NULL, 10);
+        total_bytes = strtoull(total_str, NULL, 10);
+        if (total_bytes == 0) return -1;
+        *total_gb = total_bytes / (1024.0 * 1024 * 1024);
+        *used_gb = (total_bytes - free_bytes) / (1024.0 * 1024 * 1024);
+        *used_percent = (int)((*used_gb * 100) / (*total_gb));
+        return 0;
+    }
     return -1;
 }
+// -----------------------------------------
+
+// Заглушки для остальных функций
 void get_remote_resource_stats(const char* host, const char* login, const char* password,
     char* out_buf, unsigned int buf_size) {
     if (out_buf) out_buf[0] = '\0';
@@ -242,13 +300,26 @@ struct HostInfo* read_hosts(const char* filename, int* count) { *count = 0; retu
 void free_hosts(struct HostInfo* hosts, int count) {}
 
 int main() {
-    // Тест: получение загрузки CPU локальной машины
-    char cpu_value[32];
-    if (run_wmic_csv(1, "localhost", "", "", "cpu get loadpercentage", cpu_value, sizeof(cpu_value)) == 0) {
-        printf("CPU Load: %s%%\n", cpu_value);
-    }
-    else {
-        printf("WMIC query failed. Make sure WMIC is available.\n");
-    }
+    // Тест: получить CPU, RAM и диск C: для localhost
+    int cpu;
+    if (get_cpu_usage(1, "localhost", "", "", &cpu) == 0)
+        printf("CPU: %d%%\n", cpu);
+    else
+        printf("CPU: ERROR\n");
+
+    int ram_percent;
+    unsigned long long used_mb, total_mb;
+    if (get_ram_usage(1, "localhost", "", "", &ram_percent, &used_mb, &total_mb) == 0)
+        printf("RAM: %d%% (%llu/%llu MB)\n", ram_percent, used_mb, total_mb);
+    else
+        printf("RAM: ERROR\n");
+
+    int disk_percent;
+    double used_gb, total_gb;
+    if (get_disk_usage(1, "localhost", "", "", &disk_percent, &used_gb, &total_gb) == 0)
+        printf("DISK C: %d%% (%.1f/%.1f GB)\n", disk_percent, used_gb, total_gb);
+    else
+        printf("DISK C: ERROR\n");
+
     return 0;
 }
