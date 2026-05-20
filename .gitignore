@@ -1,0 +1,19 @@
+# Visual Studio temporary files 
+*.exe 
+*.ilk 
+*.pdb 
+*.obj 
+*.tlog 
+*.idb 
+*.db 
+*.recipe 
+*.user 
+*.FileListAbsolute 
+ping_results.txt 
+resource_stats.txt 
+wmi_errors.log 
+Debug/ 
+Release/ 
+x64/ 
+PingAnalyzer.tlog/ 
+vc142.* 

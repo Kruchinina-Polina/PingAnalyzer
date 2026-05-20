@@ -1,0 +1,2 @@
+ping_interval 60       
+resource_interval 60
