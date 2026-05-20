@@ -89,7 +89,6 @@ DWORD WINAPI ping_worker(LPVOID arg) {
     return res;
 }
 
-// ---------- Параллельная проверка ping ----------
 void check_ping_parallel(struct HostInfo* hosts, int count, int iteration) {
     HANDLE* threads;
     int* results;
@@ -148,10 +147,22 @@ void check_ping_parallel(struct HostInfo* hosts, int count, int iteration) {
     free(threads);
     free(results);
 }
-// ------------------------------------------------
 
-// Заглушки для остальных функций
-int is_private_ip(const char* host) { return 0; }
+// ---------- Определение частного IP ----------
+int is_private_ip(const char* host) {
+    unsigned int a, b, c, d;
+    // Пытаемся распарсить IPv4 адрес
+    if (sscanf(host, "%u.%u.%u.%u", &a, &b, &c, &d) != 4) return 0;
+    // Диапазоны частных адресов:
+    if (a == 10) return 1;                         // 10.0.0.0/8
+    if (a == 172 && b >= 16 && b <= 31) return 1;  // 172.16.0.0/12
+    if (a == 192 && b == 168) return 1;            // 192.168.0.0/16
+    if (a == 127) return 1;                        // 127.0.0.0/8 (localhost)
+    return 0;
+}
+// -----------------------------------------
+
+// Заглушки для остальных функций (ресурсная часть)
 int run_wmic_csv(int is_local, const char* host, const char* login, const char* password,
     const char* wql, char* out_value, unsigned int out_size) {
     return -1;
@@ -176,15 +187,10 @@ struct HostInfo* read_hosts(const char* filename, int* count) { *count = 0; retu
 void free_hosts(struct HostInfo* hosts, int count) {}
 
 int main() {
-    // Тест: два хоста (локальный и публичный DNS)
-    struct HostInfo testHosts[2];
-    strcpy(testHosts[0].host, "127.0.0.1");
-    strcpy(testHosts[1].host, "8.8.8.8");
-    testHosts[0].login[0] = '\0';
-    testHosts[0].password[0] = '\0';
-    testHosts[1].login[0] = '\0';
-    testHosts[1].password[0] = '\0';
-
-    check_ping_parallel(testHosts, 2, 1);
+    // Небольшой тест для is_private_ip
+    const char* ips[] = { "192.168.1.1", "10.0.0.5", "172.20.0.1", "8.8.8.8", "127.0.0.1" };
+    for (int i = 0; i < 5; i++) {
+        printf("%s -> %s\n", ips[i], is_private_ip(ips[i]) ? "private" : "public");
+    }
     return 0;
 }
