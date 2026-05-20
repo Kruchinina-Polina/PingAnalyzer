@@ -148,25 +148,80 @@ void check_ping_parallel(struct HostInfo* hosts, int count, int iteration) {
     free(results);
 }
 
-// ---------- Определение частного IP ----------
 int is_private_ip(const char* host) {
     unsigned int a, b, c, d;
-    // Пытаемся распарсить IPv4 адрес
     if (sscanf(host, "%u.%u.%u.%u", &a, &b, &c, &d) != 4) return 0;
-    // Диапазоны частных адресов:
-    if (a == 10) return 1;                         // 10.0.0.0/8
-    if (a == 172 && b >= 16 && b <= 31) return 1;  // 172.16.0.0/12
-    if (a == 192 && b == 168) return 1;            // 192.168.0.0/16
-    if (a == 127) return 1;                        // 127.0.0.0/8 (localhost)
+    if (a == 10) return 1;
+    if (a == 172 && b >= 16 && b <= 31) return 1;
+    if (a == 192 && b == 168) return 1;
+    if (a == 127) return 1;
     return 0;
 }
-// -----------------------------------------
 
-// Заглушки для остальных функций (ресурсная часть)
+// ---------- Новая функция: универсальный WMIC CSV-запрос ----------
 int run_wmic_csv(int is_local, const char* host, const char* login, const char* password,
-    const char* wql, char* out_value, unsigned int out_size) {
-    return -1;
+    const char* wql, char* out_value, unsigned int out_size)
+{
+    char cmd[2048];
+    char auth[256];
+    FILE* pipe;
+    char line[1024];
+    int found;
+    char* first_comma, * value, * end;
+    time_t now;
+    struct tm* t;
+    FILE* err;
+
+    auth[0] = '\0';
+    if (is_local) {
+        sprintf(cmd, "wmic %s /format:csv 2>&1", wql);
+    }
+    else {
+        if (login && login[0] && password && password[0]) {
+            sprintf(auth, "/user:\"%s\" /password:\"%s\" ", login, password);
+        }
+        sprintf(cmd, "wmic /node:\"%s\" /timeout:5000 %s %s /format:csv 2>&1", host, auth, wql);
+    }
+
+    pipe = _popen(cmd, "r");
+    if (!pipe) return -1;
+
+    found = 0;
+    while (fgets(line, sizeof(line), pipe)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (strncmp(line, "Node", 4) == 0) continue;
+        if (strlen(line) == 0) continue;
+        first_comma = strchr(line, ',');
+        if (!first_comma) continue;
+        value = first_comma + 1;
+        if (*value == '"') value++;
+        end = value + strlen(value) - 1;
+        if (*end == '"') *end = '\0';
+        strncpy(out_value, value, out_size - 1);
+        out_value[out_size - 1] = '\0';
+        trim(out_value);
+        found = 1;
+        break;
+    }
+    _pclose(pipe);
+
+    if (!found) {
+        err = fopen(ERROR_LOG, "a");
+        if (err) {
+            now = time(NULL);
+            t = localtime(&now);
+            fprintf(err, "[%02d.%02d.%04d %02d:%02d:%02d] Команда: %s\n",
+                t->tm_mday, t->tm_mon + 1, t->tm_year + 1900,
+                t->tm_hour, t->tm_min, t->tm_sec, cmd);
+            fclose(err);
+        }
+        return -1;
+    }
+    return 0;
 }
+// ----------------------------------------------------------------
+
+// Заглушки для остальных функций (будут добавлены позже)
 int get_cpu_usage(int is_local, const char* host, const char* login, const char* password, int* cpu_percent) { return -1; }
 int get_ram_usage(int is_local, const char* host, const char* login, const char* password,
     int* used_percent, unsigned long long* used_mb, unsigned long long* total_mb) {
@@ -187,10 +242,13 @@ struct HostInfo* read_hosts(const char* filename, int* count) { *count = 0; retu
 void free_hosts(struct HostInfo* hosts, int count) {}
 
 int main() {
-    // Небольшой тест для is_private_ip
-    const char* ips[] = { "192.168.1.1", "10.0.0.5", "172.20.0.1", "8.8.8.8", "127.0.0.1" };
-    for (int i = 0; i < 5; i++) {
-        printf("%s -> %s\n", ips[i], is_private_ip(ips[i]) ? "private" : "public");
+    // Тест: получение загрузки CPU локальной машины
+    char cpu_value[32];
+    if (run_wmic_csv(1, "localhost", "", "", "cpu get loadpercentage", cpu_value, sizeof(cpu_value)) == 0) {
+        printf("CPU Load: %s%%\n", cpu_value);
+    }
+    else {
+        printf("WMIC query failed. Make sure WMIC is available.\n");
     }
     return 0;
 }
