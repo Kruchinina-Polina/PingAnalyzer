@@ -52,7 +52,6 @@ int is_ignored_line(const char* line) {
     return (line[0] == '#' || strlen(line) == 0);
 }
 
-// ---------- read_intervals ----------
 void read_intervals(int* ping_sec, int* resource_sec) {
     FILE* cfg;
     char line[MAX_LINE_LEN];
@@ -73,11 +72,26 @@ void read_intervals(int* ping_sec, int* resource_sec) {
     }
     fclose(cfg);
 }
-// ---------- Конец read_intervals ----------
 
-// Остальные заглушки
-int simple_ping(const char* host) { return 0; }
-DWORD WINAPI ping_worker(LPVOID arg) { return 0; }
+// ---------- Простой ping и воркер ----------
+int simple_ping(const char* host) {
+    char command[512];
+    sprintf(command, "ping -n 1 -w 1000 %s > nul 2>&1", host);
+    return system(command);
+}
+
+DWORD WINAPI ping_worker(LPVOID arg) {
+    struct PingThreadData* data = (struct PingThreadData*)arg;
+    int res = simple_ping(data->host);
+    printf("%s[%d] %s - %s\033[0m\n",
+        res == 0 ? "\033[32m" : "\033[31m",
+        data->index, data->host, res == 0 ? "AVAILABLE" : "UNAVAILABLE");
+    free(data);
+    return res;
+}
+// -------------------------------------
+
+// Остальные заглушки (ресурсная часть пока не реализована)
 void check_ping_parallel(struct HostInfo* hosts, int count, int iteration) {}
 int is_private_ip(const char* host) { return 0; }
 int run_wmic_csv(int is_local, const char* host, const char* login, const char* password,
@@ -104,8 +118,12 @@ struct HostInfo* read_hosts(const char* filename, int* count) { *count = 0; retu
 void free_hosts(struct HostInfo* hosts, int count) {}
 
 int main() {
-    int ping_sec, res_sec;
-    read_intervals(&ping_sec, &res_sec);
-    printf("Ping interval: %d sec, Resource interval: %d sec\n", ping_sec, res_sec);
+    // Тестируем один поток для localhost
+    struct PingThreadData* data = (struct PingThreadData*)malloc(sizeof(struct PingThreadData));
+    strcpy(data->host, "127.0.0.1");
+    data->index = 1;
+    HANDLE h = CreateThread(NULL, 0, ping_worker, data, 0, NULL);
+    WaitForSingleObject(h, INFINITE);
+    CloseHandle(h);
     return 0;
 }
