@@ -33,7 +33,6 @@ struct ResourceThreadData {
     char result[2048];
 };
 
-// ---------- Утилитарные функции ----------
 int is_digit(char c) {
     return (c >= '0' && c <= '9');
 }
@@ -52,10 +51,31 @@ void trim(char* str) {
 int is_ignored_line(const char* line) {
     return (line[0] == '#' || strlen(line) == 0);
 }
-// ---------- Конец утилит ----------
 
-// Прототипы остальных функций (заглушки)
-void read_intervals(int* ping_sec, int* resource_sec) {}
+// ---------- read_intervals ----------
+void read_intervals(int* ping_sec, int* resource_sec) {
+    FILE* cfg;
+    char line[MAX_LINE_LEN];
+    char key[64];
+    int val;
+    *ping_sec = DEFAULT_PING_INTERVAL_SEC;
+    *resource_sec = DEFAULT_RESOURCE_INTERVAL_SEC;
+    cfg = fopen(CONFIG_FILE, "r");
+    if (!cfg) return;
+    while (fgets(line, sizeof(line), cfg)) {
+        line[strcspn(line, "\n")] = '\0';
+        trim(line);
+        if (is_ignored_line(line)) continue;
+        if (sscanf(line, "%s %d", key, &val) == 2 && val > 0) {
+            if (strcmp(key, "ping_interval") == 0) *ping_sec = val;
+            else if (strcmp(key, "resource_interval") == 0) *resource_sec = val;
+        }
+    }
+    fclose(cfg);
+}
+// ---------- Конец read_intervals ----------
+
+// Остальные заглушки
 int simple_ping(const char* host) { return 0; }
 DWORD WINAPI ping_worker(LPVOID arg) { return 0; }
 void check_ping_parallel(struct HostInfo* hosts, int count, int iteration) {}
@@ -84,6 +104,8 @@ struct HostInfo* read_hosts(const char* filename, int* count) { *count = 0; retu
 void free_hosts(struct HostInfo* hosts, int count) {}
 
 int main() {
-    printf("Utils added\n");
+    int ping_sec, res_sec;
+    read_intervals(&ping_sec, &res_sec);
+    printf("Ping interval: %d sec, Resource interval: %d sec\n", ping_sec, res_sec);
     return 0;
 }
