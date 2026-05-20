@@ -219,7 +219,6 @@ int run_wmic_csv(int is_local, const char* host, const char* login, const char* 
     return 0;
 }
 
-// ---------- Функции сбора метрик ----------
 int get_cpu_usage(int is_local, const char* host, const char* login, const char* password, int* cpu_percent) {
     char val[32];
     if (run_wmic_csv(is_local, host, login, password, "cpu get loadpercentage", val, sizeof(val)) == 0) {
@@ -286,13 +285,108 @@ int get_disk_usage(int is_local, const char* host, const char* login, const char
     }
     return -1;
 }
-// -----------------------------------------
 
-// Заглушки для остальных функций
+// ---------- Полный сбор ресурсов для одного хоста ----------
 void get_remote_resource_stats(const char* host, const char* login, const char* password,
-    char* out_buf, unsigned int buf_size) {
-    if (out_buf) out_buf[0] = '\0';
+    char* out_buf, unsigned int buf_size)
+{
+    char ping_cmd[512];
+    int is_local;
+    int cpu_test;
+    char tmp[256];
+    int has_error;
+    int cpu;
+    int ram_percent;
+    unsigned long long used_mb, total_mb;
+    int disk_percent;
+    double used_gb, total_gb;
+    FILE* err_log;
+    time_t now;
+    struct tm* t;
+
+    out_buf[0] = '\0';
+
+    // Для публичных IP ресурсы не собираем (только приватные и localhost)
+    if (!is_private_ip(host)) {
+        sprintf(out_buf, "PUBLIC_HOST (ресурсы не собираются)");
+        return;
+    }
+
+    // Проверяем доступность хоста через ping (одна попытка)
+    sprintf(ping_cmd, "ping -n 1 -w 1000 %s > nul 2>&1", host);
+    if (system(ping_cmd) != 0) {
+        sprintf(out_buf, "HOST UNREACHABLE");
+        return;
+    }
+
+    // Определяем, является ли хост локальным
+    is_local = (strcmp(host, "localhost") == 0 || strcmp(host, "127.0.0.1") == 0);
+
+    // Если хост не локальный, пробуем подключиться к его WMIC
+    if (!is_local) {
+        cpu_test = -1;
+        if (get_cpu_usage(1, host, login, password, &cpu_test) == 0 && cpu_test >= 0) {
+            is_local = 1;
+        }
+    }
+
+    has_error = 0;
+
+    // Получение загрузки CPU
+    cpu = -1;
+    if (get_cpu_usage(is_local, host, login, password, &cpu) == 0 && cpu >= 0) {
+        sprintf(tmp, "CPU:%d%% ", cpu);
+        strncat(out_buf, tmp, buf_size - strlen(out_buf) - 1);
+    }
+    else {
+        strncat(out_buf, "CPU:ERROR ", buf_size - strlen(out_buf) - 1);
+        has_error = 1;
+    }
+
+    // Получение использования RAM
+    ram_percent = -1;
+    used_mb = 0;
+    total_mb = 0;
+    if (get_ram_usage(is_local, host, login, password, &ram_percent, &used_mb, &total_mb) == 0 && ram_percent >= 0) {
+        sprintf(tmp, "RAM:%d%% (%llu/%lluMB) ", ram_percent, used_mb, total_mb);
+        strncat(out_buf, tmp, buf_size - strlen(out_buf) - 1);
+    }
+    else {
+        strncat(out_buf, "RAM:ERROR ", buf_size - strlen(out_buf) - 1);
+        has_error = 1;
+    }
+
+    // Получение использования диска C:
+    disk_percent = -1;
+    used_gb = 0;
+    total_gb = 0;
+    if (get_disk_usage(is_local, host, login, password, &disk_percent, &used_gb, &total_gb) == 0 && disk_percent >= 0) {
+        sprintf(tmp, "DISK_C:%d%% (%.1f/%.1fGB)", disk_percent, used_gb, total_gb);
+        strncat(out_buf, tmp, buf_size - strlen(out_buf) - 1);
+    }
+    else {
+        strncat(out_buf, "DISK_C:ERROR", buf_size - strlen(out_buf) - 1);
+        has_error = 1;
+    }
+
+    // Логирование ошибок
+    if (has_error && strlen(out_buf) < 50) {
+        err_log = fopen(ERROR_LOG, "a");
+        if (err_log) {
+            now = time(NULL);
+            t = localtime(&now);
+            fprintf(err_log, "[%02d.%02d.%04d %02d:%02d:%02d] %s - %s\n",
+                t->tm_mday, t->tm_mon + 1, t->tm_year + 1900,
+                t->tm_hour, t->tm_min, t->tm_sec, host, out_buf);
+            fclose(err_log);
+        }
+    }
+
+    if (strlen(out_buf) == 0) strcpy(out_buf, "UNKNOWN");
 }
+// -------------------------------------------------------
+
+// Заглушки для оставшихся функций
 int parse_disk_usage(const char* stats) { return -1; }
 DWORD WINAPI resource_worker(LPVOID arg) { return 0; }
 void check_resources_parallel(struct HostInfo* hosts, int count, int iteration) {}
@@ -300,26 +394,9 @@ struct HostInfo* read_hosts(const char* filename, int* count) { *count = 0; retu
 void free_hosts(struct HostInfo* hosts, int count) {}
 
 int main() {
-    // Тест: получить CPU, RAM и диск C: для localhost
-    int cpu;
-    if (get_cpu_usage(1, "localhost", "", "", &cpu) == 0)
-        printf("CPU: %d%%\n", cpu);
-    else
-        printf("CPU: ERROR\n");
-
-    int ram_percent;
-    unsigned long long used_mb, total_mb;
-    if (get_ram_usage(1, "localhost", "", "", &ram_percent, &used_mb, &total_mb) == 0)
-        printf("RAM: %d%% (%llu/%llu MB)\n", ram_percent, used_mb, total_mb);
-    else
-        printf("RAM: ERROR\n");
-
-    int disk_percent;
-    double used_gb, total_gb;
-    if (get_disk_usage(1, "localhost", "", "", &disk_percent, &used_gb, &total_gb) == 0)
-        printf("DISK C: %d%% (%.1f/%.1f GB)\n", disk_percent, used_gb, total_gb);
-    else
-        printf("DISK C: ERROR\n");
-
+    // Тест: собираем ресурсы для localhost
+    char result[2048];
+    get_remote_resource_stats("localhost", "", "", result, sizeof(result));
+    printf("localhost -> %s\n", result);
     return 0;
 }
