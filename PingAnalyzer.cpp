@@ -289,13 +289,91 @@ int get_disk_usage(int is_local, const char* host, const char* login, const char
 void get_remote_resource_stats(const char* host, const char* login, const char* password,
     char* out_buf, unsigned int buf_size)
 {
-    // ... (та же реализация, что в шаге 9) ...
-    // Для краткости я пропущу её полное повторение, но она уже есть в вашем файле. 
-    // На практике вы просто оставляете код из шага 9 без изменений.
-    // Я приведу полный код в конце сообщения, чтобы не было разрывов.
+    char ping_cmd[512];
+    int is_local;
+    int cpu_test;
+    char tmp[256];
+    int has_error;
+    int cpu;
+    int ram_percent;
+    unsigned long long used_mb, total_mb;
+    int disk_percent;
+    double used_gb, total_gb;
+    FILE* err_log;
+    time_t now;
+    struct tm* t;
+
+    out_buf[0] = '\0';
+
+    if (!is_private_ip(host)) {
+        sprintf(out_buf, "PUBLIC_HOST (ресурсы не собираются)");
+        return;
+    }
+
+    sprintf(ping_cmd, "ping -n 1 -w 1000 %s > nul 2>&1", host);
+    if (system(ping_cmd) != 0) {
+        sprintf(out_buf, "HOST UNREACHABLE");
+        return;
+    }
+
+    is_local = (strcmp(host, "localhost") == 0 || strcmp(host, "127.0.0.1") == 0);
+    if (!is_local) {
+        cpu_test = -1;
+        if (get_cpu_usage(1, host, login, password, &cpu_test) == 0 && cpu_test >= 0) {
+            is_local = 1;
+        }
+    }
+
+    has_error = 0;
+    cpu = -1;
+    if (get_cpu_usage(is_local, host, login, password, &cpu) == 0 && cpu >= 0) {
+        sprintf(tmp, "CPU:%d%% ", cpu);
+        strncat(out_buf, tmp, buf_size - strlen(out_buf) - 1);
+    }
+    else {
+        strncat(out_buf, "CPU:ERROR ", buf_size - strlen(out_buf) - 1);
+        has_error = 1;
+    }
+
+    ram_percent = -1;
+    used_mb = 0;
+    total_mb = 0;
+    if (get_ram_usage(is_local, host, login, password, &ram_percent, &used_mb, &total_mb) == 0 && ram_percent >= 0) {
+        sprintf(tmp, "RAM:%d%% (%llu/%lluMB) ", ram_percent, used_mb, total_mb);
+        strncat(out_buf, tmp, buf_size - strlen(out_buf) - 1);
+    }
+    else {
+        strncat(out_buf, "RAM:ERROR ", buf_size - strlen(out_buf) - 1);
+        has_error = 1;
+    }
+
+    disk_percent = -1;
+    used_gb = 0;
+    total_gb = 0;
+    if (get_disk_usage(is_local, host, login, password, &disk_percent, &used_gb, &total_gb) == 0 && disk_percent >= 0) {
+        sprintf(tmp, "DISK_C:%d%% (%.1f/%.1fGB)", disk_percent, used_gb, total_gb);
+        strncat(out_buf, tmp, buf_size - strlen(out_buf) - 1);
+    }
+    else {
+        strncat(out_buf, "DISK_C:ERROR", buf_size - strlen(out_buf) - 1);
+        has_error = 1;
+    }
+
+    if (has_error && strlen(out_buf) < 50) {
+        err_log = fopen(ERROR_LOG, "a");
+        if (err_log) {
+            now = time(NULL);
+            t = localtime(&now);
+            fprintf(err_log, "[%02d.%02d.%04d %02d:%02d:%02d] %s - %s\n",
+                t->tm_mday, t->tm_mon + 1, t->tm_year + 1900,
+                t->tm_hour, t->tm_min, t->tm_sec, host, out_buf);
+            fclose(err_log);
+        }
+    }
+
+    if (strlen(out_buf) == 0) strcpy(out_buf, "UNKNOWN");
 }
 
-// ---------- НОВЫЕ ФУНКЦИИ ШАГА 10 ----------
 int parse_disk_usage(const char* stats) {
     const char* disk_tag = "DISK_C:";
     char* p = strstr(stats, disk_tag);
@@ -312,30 +390,113 @@ DWORD WINAPI resource_worker(LPVOID arg) {
         data->result, sizeof(data->result));
     return 0;
 }
-// ------------------------------------------
 
-// Заглушки для остальных функций
-void check_resources_parallel(struct HostInfo* hosts, int count, int iteration) {}
-struct HostInfo* read_hosts(const char* filename, int* count) { *count = 0; return NULL; }
+// ---------- НОВАЯ ФУНКЦИЯ ШАГА 11 ----------
+void check_resources_parallel(struct HostInfo* hosts, int count, int iteration) {
+    struct ResourceThreadData* threadData;
+    HANDLE* threads;
+    int i;
+    FILE* f;
+    time_t now;
+    struct tm* t;
+    char** overloaded_hosts;
+    int* overloaded_percents;
+    int overload_count;
+    char msg[2048];
+    char line[256];
+    int disk_percent;
+
+    printf("\033[35m[RESOURCE] Итерация #%d (параллельный сбор)\033[0m\n", iteration);
+
+    threadData = (struct ResourceThreadData*)malloc(count * sizeof(struct ResourceThreadData));
+    threads = (HANDLE*)malloc(count * sizeof(HANDLE));
+
+    for (i = 0; i < count; i++) {
+        threadData[i].hostInfo = hosts[i];
+        threadData[i].index = i;
+        threadData[i].result[0] = '\0';
+        threads[i] = CreateThread(NULL, 0, resource_worker, &threadData[i], 0, NULL);
+        if (threads[i] == NULL) {
+            printf("Ошибка создания потока для %s\n", hosts[i].host);
+            strcpy(threadData[i].result, "THREAD ERROR");
+        }
+    }
+
+    WaitForMultipleObjects(count, threads, TRUE, INFINITE);
+
+    for (i = 0; i < count; i++) {
+        if (threads[i] != NULL) CloseHandle(threads[i]);
+    }
+
+    f = fopen(RESOURCE_FILE, "a");
+    if (!f) {
+        printf("Ошибка открытия %s\n", RESOURCE_FILE);
+        free(threadData);
+        free(threads);
+        return;
+    }
+
+    now = time(NULL);
+    t = localtime(&now);
+    fprintf(f, "\n========================================\n");
+    fprintf(f, "Сбор ресурсов: %02d.%02d.%04d %02d:%02d:%02d\n",
+        t->tm_mday, t->tm_mon + 1, t->tm_year + 1900, t->tm_hour, t->tm_min, t->tm_sec);
+    fprintf(f, "========================================\n");
+
+    overloaded_hosts = NULL;
+    overloaded_percents = NULL;
+    overload_count = 0;
+
+    for (i = 0; i < count; i++) {
+        fprintf(f, "[%s] %s\n", hosts[i].host, threadData[i].result);
+        printf("\033[35m  %s -> %s\033[0m\n", hosts[i].host, threadData[i].result);
+
+        disk_percent = parse_disk_usage(threadData[i].result);
+        if (disk_percent > 80) {
+            overloaded_hosts = (char**)realloc(overloaded_hosts, (overload_count + 1) * sizeof(char*));
+            overloaded_percents = (int*)realloc(overloaded_percents, (overload_count + 1) * sizeof(int));
+            overloaded_hosts[overload_count] = (char*)malloc(strlen(hosts[i].host) + 1);
+            strcpy(overloaded_hosts[overload_count], hosts[i].host);
+            overloaded_percents[overload_count] = disk_percent;
+            overload_count++;
+        }
+    }
+    fclose(f);
+
+    if (overload_count > 0) {
+        sprintf(msg, "В итерации #%d обнаружены хосты с загрузкой диска C: > 80%%:\n\n", iteration);
+        for (i = 0; i < overload_count && strlen(msg) < sizeof(msg) - 100; i++) {
+            sprintf(line, "  %s — %d%%\n", overloaded_hosts[i], overloaded_percents[i]);
+            strncat(msg, line, sizeof(msg) - strlen(msg) - 1);
+        }
+        MessageBoxA(NULL, msg, "Критическая загрузка диска", MB_OK | MB_ICONWARNING);
+    }
+
+    for (i = 0; i < overload_count; i++) free(overloaded_hosts[i]);
+    free(overloaded_hosts);
+    free(overloaded_percents);
+    free(threadData);
+    free(threads);
+}
+// -----------------------------------------
+
+// Заглушка read_hosts (реализация будет в шаге 12)
+struct HostInfo* read_hosts(const char* filename, int* count) {
+    *count = 0;
+    return NULL;
+}
 void free_hosts(struct HostInfo* hosts, int count) {}
 
 int main() {
-    // Тест: создаём один поток для сбора ресурсов
-    struct ResourceThreadData data;
-    strcpy(data.hostInfo.host, "localhost");
-    data.hostInfo.login[0] = '\0';
-    data.hostInfo.password[0] = '\0';
-    data.result[0] = '\0';
+    // Тест: создадим массив из двух хостов
+    struct HostInfo testHosts[2];
+    strcpy(testHosts[0].host, "127.0.0.1");
+    strcpy(testHosts[1].host, "192.168.1.1");
+    testHosts[0].login[0] = '\0';
+    testHosts[0].password[0] = '\0';
+    testHosts[1].login[0] = '\0';
+    testHosts[1].password[0] = '\0';
 
-    HANDLE h = CreateThread(NULL, 0, resource_worker, &data, 0, NULL);
-    WaitForSingleObject(h, INFINITE);
-    CloseHandle(h);
-
-    printf("Result: %s\n", data.result);
-    // Дополнительно проверим парсинг диска
-    int disk = parse_disk_usage(data.result);
-    if (disk >= 0) printf("Disk usage: %d%%\n", disk);
-    else printf("Disk usage not found\n");
-
+    check_resources_parallel(testHosts, 2, 1);
     return 0;
 }
