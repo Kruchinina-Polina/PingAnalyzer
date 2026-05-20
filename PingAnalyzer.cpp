@@ -391,7 +391,6 @@ DWORD WINAPI resource_worker(LPVOID arg) {
     return 0;
 }
 
-// ---------- НОВАЯ ФУНКЦИЯ ШАГА 11 ----------
 void check_resources_parallel(struct HostInfo* hosts, int count, int iteration) {
     struct ResourceThreadData* threadData;
     HANDLE* threads;
@@ -478,25 +477,61 @@ void check_resources_parallel(struct HostInfo* hosts, int count, int iteration) 
     free(threadData);
     free(threads);
 }
-// -----------------------------------------
 
-// Заглушка read_hosts (реализация будет в шаге 12)
+// ==================== НОВЫЕ ФУНКЦИИ ШАГА 12 ====================
 struct HostInfo* read_hosts(const char* filename, int* count) {
+    FILE* f;
+    struct HostInfo* hosts;
+    char line[MAX_LINE_LEN];
+    char host[MAX_IP_LEN];
+    char login[128];
+    char password[128];
+    int n;
+
     *count = 0;
-    return NULL;
+    f = fopen(filename, "r");
+    if (!f) return NULL;
+    hosts = NULL;
+
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\n")] = '\0';
+        trim(line);
+        if (is_ignored_line(line)) continue;
+
+        host[0] = login[0] = password[0] = '\0';
+        n = sscanf(line, "%255s %127s %127s", host, login, password);
+        if (n < 1) continue;
+
+        hosts = (struct HostInfo*)realloc(hosts, (*count + 1) * sizeof(struct HostInfo));
+        strcpy(hosts[*count].host, host);
+        if (n >= 2) strcpy(hosts[*count].login, login);
+        else hosts[*count].login[0] = '\0';
+        if (n >= 3) strcpy(hosts[*count].password, password);
+        else hosts[*count].password[0] = '\0';
+        (*count)++;
+    }
+    fclose(f);
+    return hosts;
 }
-void free_hosts(struct HostInfo* hosts, int count) {}
+
+void free_hosts(struct HostInfo* hosts, int count) {
+    (void)count; // подавляем предупреждение о неиспользуемом параметре
+    free(hosts);
+}
+// ===============================================================
 
 int main() {
-    // Тест: создадим массив из двух хостов
-    struct HostInfo testHosts[2];
-    strcpy(testHosts[0].host, "127.0.0.1");
-    strcpy(testHosts[1].host, "192.168.1.1");
-    testHosts[0].login[0] = '\0';
-    testHosts[0].password[0] = '\0';
-    testHosts[1].login[0] = '\0';
-    testHosts[1].password[0] = '\0';
-
-    check_resources_parallel(testHosts, 2, 1);
+    int host_count;
+    struct HostInfo* hosts = read_hosts("hosts.txt", &host_count);
+    if (hosts && host_count > 0) {
+        printf("Прочитано хостов: %d\n", host_count);
+        for (int i = 0; i < host_count; i++) {
+            printf("  %s\n", hosts[i].host);
+        }
+        free_hosts(hosts, host_count);
+    }
+    else {
+        printf("Не удалось прочитать hosts.txt\n");
+    }
     return 0;
 }
