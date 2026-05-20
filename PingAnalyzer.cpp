@@ -73,7 +73,6 @@ void read_intervals(int* ping_sec, int* resource_sec) {
     fclose(cfg);
 }
 
-// ---------- Простой ping и воркер ----------
 int simple_ping(const char* host) {
     char command[512];
     sprintf(command, "ping -n 1 -w 1000 %s > nul 2>&1", host);
@@ -89,10 +88,69 @@ DWORD WINAPI ping_worker(LPVOID arg) {
     free(data);
     return res;
 }
-// -------------------------------------
 
-// Остальные заглушки (ресурсная часть пока не реализована)
-void check_ping_parallel(struct HostInfo* hosts, int count, int iteration) {}
+// ---------- Параллельная проверка ping ----------
+void check_ping_parallel(struct HostInfo* hosts, int count, int iteration) {
+    HANDLE* threads;
+    int* results;
+    int i;
+    FILE* f;
+    time_t now;
+    struct tm* t;
+    int fail;
+    char msg[512];
+
+    printf("\033[36m[PING] Итерация #%d\033[0m\n", iteration);
+    threads = (HANDLE*)malloc(count * sizeof(HANDLE));
+    results = (int*)calloc(count, sizeof(int));
+
+    for (i = 0; i < count; i++) {
+        struct PingThreadData* data = (struct PingThreadData*)malloc(sizeof(struct PingThreadData));
+        strcpy(data->host, hosts[i].host);
+        data->index = i + 1;
+        threads[i] = CreateThread(NULL, 0, ping_worker, data, 0, NULL);
+    }
+
+    WaitForMultipleObjects(count, threads, TRUE, INFINITE);
+
+    for (i = 0; i < count; i++) {
+        DWORD exit_code;
+        GetExitCodeThread(threads[i], &exit_code);
+        results[i] = (int)exit_code;
+        CloseHandle(threads[i]);
+    }
+
+    f = fopen(RESULT_FILE, "a");
+    if (f) {
+        now = time(NULL);
+        t = localtime(&now);
+        fprintf(f, "\n========================================\n");
+        fprintf(f, "PING итерация #%d: %02d.%02d.%04d %02d:%02d:%02d\n",
+            iteration, t->tm_mday, t->tm_mon + 1, t->tm_year + 1900,
+            t->tm_hour, t->tm_min, t->tm_sec);
+        fprintf(f, "========================================\n");
+        for (i = 0; i < count; i++) {
+            fprintf(f, "[%02d.%02d.%04d %02d:%02d:%02d] %s - %s\n",
+                t->tm_mday, t->tm_mon + 1, t->tm_year + 1900,
+                t->tm_hour, t->tm_min, t->tm_sec, hosts[i].host,
+                results[i] == 0 ? "AVAILABLE" : "UNAVAILABLE");
+        }
+        fclose(f);
+    }
+
+    fail = 0;
+    for (i = 0; i < count; i++) if (results[i] != 0) fail++;
+    if (fail > 0) {
+        sprintf(msg, "Итерация #%d: %d хостов недоступны.", iteration, fail);
+        MessageBoxA(NULL, msg, "Мониторинг хостов", MB_OK | MB_ICONWARNING);
+    }
+
+    free(threads);
+    free(results);
+}
+// ------------------------------------------------
+
+// Заглушки для остальных функций
 int is_private_ip(const char* host) { return 0; }
 int run_wmic_csv(int is_local, const char* host, const char* login, const char* password,
     const char* wql, char* out_value, unsigned int out_size) {
@@ -118,12 +176,15 @@ struct HostInfo* read_hosts(const char* filename, int* count) { *count = 0; retu
 void free_hosts(struct HostInfo* hosts, int count) {}
 
 int main() {
-    // Тестируем один поток для localhost
-    struct PingThreadData* data = (struct PingThreadData*)malloc(sizeof(struct PingThreadData));
-    strcpy(data->host, "127.0.0.1");
-    data->index = 1;
-    HANDLE h = CreateThread(NULL, 0, ping_worker, data, 0, NULL);
-    WaitForSingleObject(h, INFINITE);
-    CloseHandle(h);
+    // Тест: два хоста (локальный и публичный DNS)
+    struct HostInfo testHosts[2];
+    strcpy(testHosts[0].host, "127.0.0.1");
+    strcpy(testHosts[1].host, "8.8.8.8");
+    testHosts[0].login[0] = '\0';
+    testHosts[0].password[0] = '\0';
+    testHosts[1].login[0] = '\0';
+    testHosts[1].password[0] = '\0';
+
+    check_ping_parallel(testHosts, 2, 1);
     return 0;
 }
