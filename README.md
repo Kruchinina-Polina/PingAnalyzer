@@ -55,7 +55,6 @@ UNAVAILABLE - хост НЕДОСТУПЕН
 [8.8.8.8] PUBLIC_HOST (ресурсы не собираются)
 [localhost] CPU:5% RAM:30% (1536/5120MB) DISK_C:50% (66.7/133.5GB)
 Коды ошибок в resource_stats.txt
-0000000000
 PUBLIC_HOST – IP-адрес публичный. Ресурсы для таких хостов не собираются.
 HOST UNREACHABLE – хост не отвечает на ping (сеть недоступна).
 CPU:ERROR/RAM:ERROR/DISK_C:ERROR – не удалось получить соответствующий параметр (нет прав, таймаут, хост не Windows, отключён WMI).
