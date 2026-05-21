@@ -19,7 +19,7 @@ PingAnalyzer – многопоточная консольная утилита 
 С помощью командной строки (cmd)  
 cd C:\путь\к\папке\с\программой  
 PingAnalyzer.exe    
-`PowerShell`  
+PowerShell  
 cd C:\путь\к\папке\с\программой  
 .\PingAnalyzer.exe    
 config.txt – интервалы проверок  
